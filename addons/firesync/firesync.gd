@@ -1,4 +1,5 @@
 @tool
+class_name FireSync
 extends EditorPlugin
 ## Main EditorPlugin entry point for the FireSync multiplayer framework.
 ##
@@ -9,11 +10,26 @@ extends EditorPlugin
 # ------------------------------------------------------------------------------
 
 ## Setting path for the default ENet communication port.
-const SETTING_PORT := "firesync/network/default_port"
+const DEFAULT_PORT_SETTING_PATH: String = (
+		"firesync/network/default_port")
 ## Setting path for the maximum allowed concurrent client connections.
-const SETTING_MAX_PEERS := "firesync/network/max_connections"
+const MAX_CONNECTIONS_SETTING_PATH: String = (
+		"firesync/network/max_connections")
 ## Setting path for the client handshake authentication timeout limit.
-const SETTING_TIMEOUT := "firesync/network/connection_timeout"
+const CONNECTION_TIMEOUT_SETTING_PATH: String = (
+		"firesync/network/connection_timeout")
+## Setting path for the maximum length of the Peer Name String.
+const MAX_PEER_NAME_LENGTH_SETTING_PATH: String = (
+		"firesync/network/max_peer_name_length")
+
+## Default value for the default ENet communication port.
+const DEFAULT_PORT_DEFAULT_VALUE: int = 10567
+## Default value for the maximum allowed concurrent client connections.
+const MAX_CONNECTIONS_DEFAULT_VALUE: int = 32
+## Default value for the client handshake authentication timeout limit.
+const CONNECTION_TIMEOUT_DEFAULT_VALUE: int = 10.0
+## Default value for the maximum length of the Peer Name String.
+const MAX_PEER_NAME_LENGTH_DEFAULT_VALUE: int = 32
 
 # ------------------------------------------------------------------------------
 
@@ -28,8 +44,17 @@ func _disable_plugin() -> void:
 
 
 func _enter_tree() -> void:
-	# Initialization of the plugin goes here.
-	pass
+	_register_setting(
+			DEFAULT_PORT_SETTING_PATH, DEFAULT_PORT_DEFAULT_VALUE, TYPE_INT)
+	_register_setting(
+			MAX_CONNECTIONS_SETTING_PATH,
+			MAX_CONNECTIONS_DEFAULT_VALUE, TYPE_INT)
+	_register_setting(
+			CONNECTION_TIMEOUT_SETTING_PATH,
+			CONNECTION_TIMEOUT_DEFAULT_VALUE, TYPE_FLOAT)
+	_register_setting(
+			MAX_PEER_NAME_LENGTH_SETTING_PATH,
+			MAX_PEER_NAME_LENGTH_DEFAULT_VALUE, TYPE_INT)
 
 
 func _exit_tree() -> void:
@@ -41,4 +66,9 @@ func _exit_tree() -> void:
 ## Helper method to write default settings into Project Settings.
 func _register_setting(
 		setting_name: String, default_value: Variant, type: int) -> void:
+	ProjectSettings.add_property_info({
+		&"name": setting_name,
+		&"type": type,
+	})
+	ProjectSettings.set_initial_value(setting_name, default_value)
 	pass
