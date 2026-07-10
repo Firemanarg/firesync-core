@@ -68,17 +68,27 @@ var max_peer_name_length: int = 32
 var _current_state: FSSessionState = FSSessionState.OFFLINE
 ## Reference to an abstract protocol handler (e.g., ENet).
 var _network_provider: RefCounted
+## [b]Only used when peer is a client.[/b][br][br]This property acts as a local
+## buffer for the metadata, during the attempt of connection with the host.
+var _local_metadata: Dictionary = {}
+## Server-side list tracking ongoing handshakes to prevent double-handshake
+## exploits.
+var _pending_handshakes: Array[int] = []
 
 # ------------------------------------------------------------------------------
 
 func _ready() -> void:
 	_load_project_settings()
+
 	is_server_dedicated = (
 			OS.has_feature("dedicated_server")
 			or DisplayServer.get_name() == "headless")
+
 	if is_server_dedicated:
 		host_game()
-	multiplayer.peer_connected.connect(_on_engine_peer_connected)
+
+	multiplayer.connection_failed.connect(_on_connection_failed)
+	multiplayer.connected_to_server.connect(_on_connected_to_server)
 
 
 func _process(delta: float) -> void:
@@ -95,6 +105,16 @@ func get_current_state() -> FSSessionState:
 	return _current_state
 
 
+## Injects a custom network provider to override the default ENet transport socket.
+func set_network_provider(provider: RefCounted) -> void:
+	if _current_state != FSSessionState.OFFLINE:
+		push_error(
+				"FireSync: Cannot change the network provider while a session "
+				+ "is active.")
+		return
+	_network_provider = provider
+
+
 ## Commands the local peer to initialize as an authoritative session host.
 func host_game(
 		port: int = default_port, max_players: int = max_connections,
@@ -103,6 +123,7 @@ func host_game(
 
 	if not _network_provider:
 		_network_provider = ENetMultiplayerPeer.new()
+
 	var err: Error = _network_provider.create_server(port, max_players)
 	if not err == OK:
 		_network_provider = null
@@ -111,13 +132,14 @@ func host_game(
 				"FireSync: Failed to start server on port"
 				+ " %d. Error code: %s" % [port, error_string(err)])
 		return err
+
 	multiplayer.multiplayer_peer = _network_provider
 
 	var final_metadata: Dictionary = {}
 	if is_server_dedicated:
 		final_metadata[&"name"] = "Server"
 	else:
-		var host_name: String = host_metadata.get(&"name", "Host").strip_edges()
+		var host_name: String = host_metadata.get(&"name", "").strip_edges()
 		if host_name.is_empty():
 			host_name = "Host"
 		host_metadata[&"name"] = (
@@ -126,6 +148,7 @@ func host_game(
 
 		if metadata_validator.is_valid():
 			final_metadata = await metadata_validator.call(1, final_metadata)
+
 		if final_metadata.is_empty():
 			_network_provider.close()
 			_network_provider = null
@@ -137,30 +160,43 @@ func host_game(
 
 	active_peers[1] = final_metadata
 	_change_state(FSSessionState.LOBBY_ACTIVE)
+
 	if not is_server_dedicated:
 		peer_registered.emit(1, final_metadata)
+
 	return OK
 
 
 ## Requests a connection to a remote server, passing local metadata for
 ## handshaking.
-func join_game(ip: String, port: int = default_port, client_metadata: Dictionary = {}) -> Error:
+func join_game(
+		ip: String, port: int = default_port,
+		client_metadata: Dictionary = {}) -> Error:
+	if not _current_state == FSSessionState.OFFLINE:
+		return ERR_ALREADY_IN_USE
+
+	_local_metadata = client_metadata
+	_change_state(FSSessionState.CLIENT_CONNECTING)
+
+	if not _network_provider:
+		_network_provider = ENetMultiplayerPeer.new()
+
+	var err: Error = _network_provider.create_client(ip, port)
+	if not err == OK:
+		_network_provider = null
+		_change_state(FSSessionState.OFFLINE)
+		push_error(
+				"FireSync: Failed to join game "
+				+ " %s:%d. Error code: %s" % [ip, port, error_string(err)])
+		return err
+
+	multiplayer.multiplayer_peer = _network_provider
 	return OK
 
 
 ## Host-only. Kicks a peer from the server with a reason. (Server authoritative)
 func kick_peer(peer_id: int, reason: String = "") -> void:
 	pass
-
-
-## Injects a custom network provider to override the default ENet transport socket.
-func set_network_provider(provider: RefCounted) -> void:
-	if _current_state != FSSessionState.OFFLINE:
-		push_error(
-				"FireSync: Cannot change the network provider while a session "
-				+ "is active.")
-		return
-	_network_provider = provider
 
 # ------------------------------------------------------------------------------
 
@@ -191,14 +227,83 @@ func _change_state(new_state: FSSessionState) -> void:
 	session_state_changed.emit(new_state)
 
 
-## Registers a connected client handshake with its validated metadata.
-## (Server-side RPC)
+## Validate and registers a connected client handshake with its metadata.
+## (Server-side RPC). The method runs in 7 steps:[br][br]
+## [b]1.[/b] Check if another validation is in progress, to prevent
+## duplicate/re-entry handshake exploits.[br]
+## [b]2.[/b] Apply server-side safety and sanity check on metadata.[br]
+## [b]3.[/b] Dinamically validate metadata using method stored in
+## [member metadata_validator].[br]
+## [b]4.[/b] Host lifecycle validation: Check if server closed during the await
+## pause.[br]
+## [b]5.[/b] Check if validation has failed.[br]
+## [b]6.[/b] Check if physical client is valid after await.[br]
+## [b]7.[/b] Authoritative registrate and cleanup.
 @rpc("any_peer", "reliable")
 func _register_client_handshake(metadata: Dictionary) -> void:
-	pass
+	var sender_id: int = multiplayer.get_remote_sender_id()
+
+	if active_peers.has(sender_id) or sender_id in _pending_handshakes:
+		kick_peer(sender_id, "Validation already in progress or completed.")
+		return
+	_pending_handshakes.append(sender_id)
+
+	var client_name: String = metadata.get(&"name", "").strip_edges()
+	if client_name.is_empty():
+		client_name = "Player_" + str(sender_id)
+	metadata[&"name"] = (
+			client_name.left(max_peer_name_length).strip_edges())
+
+	var final_metadata: Dictionary = metadata
+	if metadata_validator.is_valid():
+		final_metadata = await metadata_validator.call(sender_id, metadata)
+
+	if not is_inside_tree() or _current_state == FSSessionState.OFFLINE:
+		return
+
+	if final_metadata.is_empty():
+		_pending_handshakes.erase(sender_id)
+		kick_peer(sender_id, "Handshake validation rejected by gameplay rules.")
+		return
+
+	if not multiplayer.get_peers().has(sender_id):
+		_pending_handshakes.erase(sender_id)
+		push_warning(
+			("FireSync: Peer %d disconnected during asynchronous" % sender_id)
+			+ " handshake validation.")
+		return
+
+	_pending_handshakes.erase(sender_id)
+	active_peers[sender_id] = final_metadata
+	peer_registered.emit(sender_id, final_metadata)
+
+
+## Internal method to clean and reset client network state upon connection drop.
+func _cleanup_failed_connection() -> void:
+	if _network_provider:
+		_network_provider.close()
+		_network_provider = null
+	multiplayer.multiplayer_peer = null
+	_local_metadata.clear()
+	_change_state(FSSessionState.OFFLINE)
 
 # ------------------------------------------------------------------------------
 
 func _on_engine_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
 		pass
+
+
+func _on_connection_failed() -> void:
+	push_error(
+			"FireSync: Connection failed. "
+			+ "Error code: %s" % [error_string(ERR_CANT_CONNECT)])
+	_cleanup_failed_connection()
+	connection_failed.emit()
+
+
+func _on_connected_to_server() -> void:
+	if not _current_state == FSSessionState.CLIENT_CONNECTING:
+		return
+	_register_client_handshake.rpc(_local_metadata)
+	connection_established.emit(multiplayer.get_unique_id())
