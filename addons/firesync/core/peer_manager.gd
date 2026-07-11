@@ -124,6 +124,17 @@ func set_network_provider(provider: RefCounted) -> void:
 func host_game(
 		port: int = default_port, max_players: int = max_connections,
 		host_metadata: Dictionary = {}) -> Error:
+	if not _current_state == FSSessionState.OFFLINE:
+		push_error("FireSync: Failed to host game. Peer is already connected.")
+		return ERR_ALREADY_IN_USE
+
+	if max_players < 1 or max_players > 4095:
+		push_error(
+				"FireSync: Failed to host game. Max players amount "
+				+ ("(%d) is out of bounds (cannot be lesser " % max_players)
+				+ "than 1 nor greater than 4095).")
+		return ERR_INVALID_PARAMETER
+
 	_change_state(FSSessionState.HOST_STARTING)
 
 	if not _network_provider:
