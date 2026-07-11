@@ -43,7 +43,7 @@ var default_port: int
 ## project settings ([code]firesync/network/max_connections[/code]).
 var max_connections: int
 ## Socket connection timeout in seconds.[br][br]Setup this value on
-## project settings ([code]firesync/network/max_connections[/code]).
+## project settings ([code]firesync/network/connection_timeout[/code]).
 var connection_timeout: float
 
 ## Read-only authoritative player register formatted as:
