@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://d2ienvpvvnr5j"]
+
+[ext_resource type="Script" uid="uid://b3k33eq33rtcc" path="res://addons/firesync/tests/fs_peer_manager_test.gd" id="1_udn6f"]
+
+[node name="FSPeerManagerTest" type="Node" unique_id=2121719814]
+script = ExtResource("1_udn6f")
