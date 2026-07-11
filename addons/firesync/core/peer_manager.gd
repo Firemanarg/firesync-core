@@ -1,4 +1,3 @@
-class_name FSPeerManager
 extends Node
 ## Global Peer Manager that handles the physical network socket, peer metadata,
 ## and session lifecycle.
@@ -78,6 +77,9 @@ var _pending_handshakes: Array[int] = []
 # ------------------------------------------------------------------------------
 
 func _ready() -> void:
+	if Engine.is_editor_hint():
+		return
+
 	_load_project_settings()
 
 	is_server_dedicated = (

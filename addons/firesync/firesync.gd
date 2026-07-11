@@ -34,12 +34,13 @@ const MAX_PEER_NAME_LENGTH_DEFAULT_VALUE: int = 32
 # ------------------------------------------------------------------------------
 
 func _enable_plugin() -> void:
-	# Add autoloads here.
+	add_autoload_singleton(
+			"FSPeerManager", "res://addons/firesync/core/peer_manager.gd")
 	pass
 
 
 func _disable_plugin() -> void:
-	# Remove autoloads here.
+	remove_autoload_singleton("FSPeerManager")
 	pass
 
 
@@ -66,6 +67,8 @@ func _exit_tree() -> void:
 ## Helper method to write default settings into Project Settings.
 func _register_setting(
 		setting_name: String, default_value: Variant, type: int) -> void:
+	if not ProjectSettings.has_setting(setting_name):
+		ProjectSettings.set_setting(setting_name, default_value)
 	ProjectSettings.add_property_info({
 		&"name": setting_name,
 		&"type": type,
