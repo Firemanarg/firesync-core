@@ -87,8 +87,11 @@ func _ready() -> void:
 	if is_server_dedicated:
 		host_game()
 
-	multiplayer.connection_failed.connect(_on_connection_failed)
-	multiplayer.connected_to_server.connect(_on_connected_to_server)
+	if multiplayer:
+		multiplayer.peer_disconnected.connect(_on_engine_peer_disconnected)
+		multiplayer.server_disconnected.connect(_on_server_disconnected)
+		multiplayer.connection_failed.connect(_on_connection_failed)
+		multiplayer.connected_to_server.connect(_on_connected_to_server)
 
 
 func _process(delta: float) -> void:
@@ -196,7 +199,19 @@ func join_game(
 
 ## Host-only. Kicks a peer from the server with a reason. (Server authoritative)
 func kick_peer(peer_id: int, reason: String = "") -> void:
-	pass
+	if not is_multiplayer_authority():
+		push_error("FireSync: Non-authority Peer attempted to kick other Peer.")
+		return
+	if peer_id == 1:
+		push_error("FireSync: Peer attempted to kick the Host.")
+		return
+
+	_receive_kick_notification.rpc_id(peer_id, reason)
+
+	await get_tree().process_frame
+
+	if multiplayer.multiplayer_peer and multiplayer.get_peers().has(peer_id):
+		multiplayer.multiplayer_peer.disconnect_peer(peer_id)
 
 # ------------------------------------------------------------------------------
 
@@ -278,8 +293,14 @@ func _register_client_handshake(metadata: Dictionary) -> void:
 	peer_registered.emit(sender_id, final_metadata)
 
 
+@rpc("authority", "reliable")
+func _receive_kick_notification(reason: String) -> void:
+	push_warning("FireSync: Peer has been kicked. Reason: %s." % reason)
+	_cleanup_disconnection()
+
+
 ## Internal method to clean and reset client network state upon connection drop.
-func _cleanup_failed_connection() -> void:
+func _cleanup_disconnection() -> void:
 	if _network_provider:
 		_network_provider.close()
 		_network_provider = null
@@ -287,18 +308,30 @@ func _cleanup_failed_connection() -> void:
 	_local_metadata.clear()
 	_change_state(FSSessionState.OFFLINE)
 
+
+func _unregister_and_cleanup_peer(peer_id: int) -> void:
+	_pending_handshakes.erase(peer_id)
+	var peer: Dictionary = active_peers.get(peer_id, {})
+	peer.clear() # In the future, add customization for peer cleanup method.
+	active_peers.erase(peer_id)
+	peer_unregistered.emit(peer_id)
+
 # ------------------------------------------------------------------------------
 
-func _on_engine_peer_connected(peer_id: int) -> void:
-	if multiplayer.is_server():
-		pass
+func _on_engine_peer_disconnected(peer_id: int) -> void:
+	_unregister_and_cleanup_peer(peer_id)
+
+
+func _on_server_disconnected() -> void:
+	_cleanup_disconnection()
+	server_disconnected.emit()
 
 
 func _on_connection_failed() -> void:
 	push_error(
 			"FireSync: Connection failed. "
 			+ "Error code: %s" % [error_string(ERR_CANT_CONNECT)])
-	_cleanup_failed_connection()
+	_cleanup_disconnection()
 	connection_failed.emit()
 
 
