@@ -226,6 +226,11 @@ func kick_peer(peer_id: int, reason: String = "") -> void:
 	if multiplayer.multiplayer_peer and multiplayer.get_peers().has(peer_id):
 		multiplayer.multiplayer_peer.disconnect_peer(peer_id)
 
+
+## Disconnects peer voluntarily from the host.
+func self_disconnect() -> void:
+	_cleanup_disconnection()
+
 # ------------------------------------------------------------------------------
 
 ## Reads centralized properties dynamically on startup from Project Settings.
